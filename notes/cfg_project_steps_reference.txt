@@ -1,0 +1,188 @@
+CFG Project – Step-by-step Workflow (as completed)
+
+Project root: /home/barjesh/study/cfg_project
+Environment: Python venv at .venv
+
+================================================================================
+STEP 1 — Sanity check a training chromosome TSV
+Goal:
+• Read one training chromosome file (chr1)
+• Print: number of rows, column names, and B/U counts for one TF (CTCF)
+• Write first 20 rows to results/
+
+1.1 Folder structure used
+• data/train/      → labeled TSVs (chr1, chr2, …, chr22 excluding chr3/chr10/chr17)
+• data/unknown/    → unknown TSVs (chr3/chr10/chr17)
+• data/genome/     → hg38 reference genome FASTA
+• src/             → scripts
+• results/         → outputs/plots/predictions
+
+1.2 (Optional) Pandas-based script (src/sanity_check.py)
+Key actions:
+• pd.read_csv(TSV, sep="\t")
+• print(len(df)), print(list(df.columns))
+• df["CTCF"].value_counts()
+• df.head(20).to_csv("results/preview_first20.tsv", sep="\t", index=False)
+
+Notes:
+• If pip install fails due to PEP 668, use a virtual environment.
+• If venv creation fails due to missing ensurepip, install python3-venv package.
+
+================================================================================
+STEP 2 — Markov model baseline (sequence-only) with evaluation
+Goal:
+• Use hg38 DNA sequence for each 200 bp bin
+• Train separate Markov models for Bound (B) vs Unbound (U)
+• Score bins using log-likelihood ratio (LLR)
+• Evaluate with k-fold cross-validation (ROC/PR curves, AUCs)
+• Sweep Markov order m=0..10 to pick best
+
+--------------------------------------------------------------------------------
+STEP 2.1 — Download hg38 FASTA and place in data/genome/
+Commands used (UCSC recommended):
+mkdir -p data/genome
+cd data/genome
+wget -O hg38.fa.gz https://hgdownload.cse.ucsc.edu/goldenpath/hg38/bigZips/hg38.fa.gz
+gunzip -f hg38.fa.gz
+
+Verification:
+ls -lh data/genome
+head -n 10 data/genome/hg38.fa
+Expected:
+• >chr1 header is present
+• Initial N blocks are normal
+
+--------------------------------------------------------------------------------
+STEP 2.2 — Index FASTA and fetch 200 bp sequence for one bin
+Install and index:
+pip install pysam
+python -c "import pysam; pysam.faidx('data/genome/hg38.fa')"
+
+Verify:
+head -n 3 data/genome/hg38.fa.fai
+
+Test sequence fetch script: src/fetch_one_bin.py
+Logic:
+• read chr1 TSV row
+• pysam.FastaFile(hg38).fetch(chr, start, end).upper()
+• print length (should be 200) and whether it contains N
+
+--------------------------------------------------------------------------------
+STEP 2.3 — Markov model core + single-fold test
+Files created:
+• src/markov_core.py
+  - train_markov(seqs, m): Laplace-smoothed context→next-base probabilities
+  - log_prob_seq(model, seq, m): log-likelihood with fallback uniform for unseen contexts
+  - llr_score(pos_model, neg_model, seq, m): logP_pos - logP_neg
+
+• src/markov_single_fold_test.py
+  - loads chr1 labeled bins
+  - fetches sequences from hg38
+  - splits into B vs U for a TF (CTCF)
+  - trains pos/neg models
+  - prints sample LLR scores for B and U bins
+
+Example run:
+python src/markov_single_fold_test.py
+
+--------------------------------------------------------------------------------
+STEP 2.4 — k-fold cross-validation (CTCF) with ROC/PR plots
+Install:
+pip install scikit-learn matplotlib
+
+File:
+• src/markov_cv.py
+Outputs:
+• results/markov_cv/roc_fold*.png
+• results/markov_cv/pr_fold*.png
+Printed:
+• Fold-wise ROC-AUC and PR-AUC
+• Mean ROC-AUC and Mean PR-AUC
+
+Example run:
+python src/markov_cv.py
+
+--------------------------------------------------------------------------------
+STEP 2.5 — Sweep Markov order m=0..10 (CTCF)
+File:
+• src/markov_sweep_m.py
+Outputs:
+• results/markov_m_sweep/m_sweep_CTCF.csv
+• results/markov_m_sweep/roc_auc_vs_m_CTCF.png
+• results/markov_m_sweep/pr_auc_vs_m_CTCF.png
+Printed:
+• mean ROC-AUC and PR-AUC for each m
+• best m by ROC-AUC and by PR-AUC
+
+Example run:
+python src/markov_sweep_m.py
+
+Observed bests (your run):
+• Best ROC-AUC at m=6
+• Best PR-AUC at m=7 (difference small)
+
+--------------------------------------------------------------------------------
+STEP 2.6 — Evaluate other TFs (REST, EP300) with chosen m
+File:
+• src/markov_cv_one_tf.py
+Outputs:
+• results/markov_tf_runs/*_roc_fold*.png, *_pr_fold*.png (per TF)
+• results/markov_tf_runs/summary_<TF>_m6.txt
+
+Example runs:
+python src/markov_cv_one_tf.py --tsv data/train/chr1_200bp_bins.tsv --hg38 data/genome/hg38.fa --tf REST  --m 6 --k 5
+python src/markov_cv_one_tf.py --tsv data/train/chr1_200bp_bins.tsv --hg38 data/genome/hg38.fa --tf EP300 --m 6 --k 5
+
+================================================================================
+STEP 3 — Train on all labeled chromosomes and predict unknown chr3/chr10/chr17
+Goal:
+• Train pos/neg Markov models on ALL labeled chromosomes (data/train/*.tsv)
+• Predict labels for unknown bins in data/unknown/chr3/chr10/chr17
+• Output per chromosome per TF: score + predicted label (threshold 0.0)
+
+File:
+• src/markov_train_predict.py
+
+Run (per TF):
+python src/markov_train_predict.py --hg38 data/genome/hg38.fa --tf CTCF  --m 6
+python src/markov_train_predict.py --hg38 data/genome/hg38.fa --tf REST  --m 6
+python src/markov_train_predict.py --hg38 data/genome/hg38.fa --tf EP300 --m 6
+
+Outputs:
+• results/markov_predictions/chr3_CTCF_pred.tsv (and similarly for chr10/chr17 and REST/EP300)
+Columns:
+chr  start  end  TF  score  pred
+
+================================================================================
+STEP 4 — Merge TF-wise predictions into final per-chromosome files
+Goal:
+• Create one final file per unknown chromosome containing:
+  chr, start, end, ATAC, CTCF_pred, REST_pred, EP300_pred
+
+File:
+• src/merge_predictions.py
+
+Run:
+python src/merge_predictions.py
+
+Outputs:
+• results/final_predictions/final_chr3_predictions.tsv
+• results/final_predictions/final_chr10_predictions.tsv
+• results/final_predictions/final_chr17_predictions.tsv
+
+================================================================================
+STEP 5 (next) — Package for submission + short report
+Recommended:
+• Copy final TSVs + plots + summary tables into a “submission/” folder
+• Zip it
+
+Example:
+mkdir -p submission
+cp results/final_predictions/*.tsv submission/
+cp -r results/markov_cv submission/
+cp -r results/markov_m_sweep submission/
+cp -r results/markov_tf_runs submission/
+zip -r submission.zip submission
+
+================================================================================
+End of workflow
