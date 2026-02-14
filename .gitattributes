@@ -1,0 +1,1 @@
+data/genome/hg38.fa filter=lfs diff=lfs merge=lfs -text
