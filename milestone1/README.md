@@ -2,6 +2,12 @@
 
 This folder contains **standalone scripts** (no notebooks) and a README with exact run commands.
 
+### Step 0: Download genome (one-time)
+```bash
+bash data/genome/get_hg38.sh
+'''
+
+
 ## A) Scripts included
 1. `MarkovCrossValidation.py`
    - Primary milestone script.
