@@ -1,4 +1,5 @@
 data/genome
+notes
 
 # Large genome files (downloaded locally)
 data/genome/hg38.fa*
